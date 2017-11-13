@@ -276,6 +276,8 @@ if __name__ == "__main__":
     SESSION = boto3.session.Session(profile_name=args.profile, region_name=args.region)
     ECS = SESSION.client('ecs')
 
+    # TODO: Check the value of a custom cloudwatch metrics to see if scaledown should be attempted or not
+
     scale_down_ecs_cluster(count=args.count,
                            cluster_name=args.cluster_name,
                            dryrun=args.dryrun)
