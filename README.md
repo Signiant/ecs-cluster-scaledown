@@ -84,8 +84,8 @@ To use an AWS access key/secret key rather than a role:
 docker run \
   -e AWS_ACCESS_KEY_ID=XXXXXX \
   -e AWS_SECRET_ACCESS_KEY=XXXXX \
-  signiant/task-cleanup \
-        --task-name-prefix one-time-task \
+  signiant/ecs-cluster-scaledown \
         --cluster-name test-cluster \
+        --count 3 \
         --region us-east-1 \
 ```
