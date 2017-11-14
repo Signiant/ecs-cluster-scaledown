@@ -35,6 +35,35 @@ def _get_instances_in_cluster(cluster_name, next_token=None, status=None):
     return result
 
 
+def _get_instance_id(cluster_name, container_instance_id):
+    query_result = ECS.describe_container_instances(cluster=cluster_name, containerInstances=[container_instance_id])
+    instance_id = None
+    if 'containerInstances' in query_result:
+        instance_id = query_result['containerInstances'][0]['ec2InstanceId']
+    return instance_id
+
+
+def _get_autoscaling_group_name(instance_id):
+    EC2 = SESSION.client('ec2')
+    asg_name = None
+    query_result = EC2.describe_instances(InstanceIds=[instance_id])
+    if 'Reservations' in query_result and 'Instances' in query_result['Reservations'][0]:
+        instance_tags = query_result['Reservations'][0]['Instances'][0]['Tags']
+        try:
+            asg_name = [d['Value'] for d in instance_tags if d['Key'] == 'aws:autoscaling:groupName'][0]
+        except:
+            pass
+    return asg_name
+
+
+def _get_autoscaling_group_min_size(autoscaling_group_name):
+    query_result = ASG.describe_auto_scaling_groups(AutoScalingGroupNames=[autoscaling_group_name])
+    if 'AutoScalingGroups' in query_result:
+        return query_result['AutoScalingGroups'][0]['MinSize']
+    else:
+        return None
+
+
 def _get_instance_task_count(cluster_name, container_instance_id):
     number_of_tasks = 0
     task_list_query_result = ECS.list_tasks(cluster=cluster_name, containerInstance=container_instance_id)
@@ -151,7 +180,6 @@ def _terminate_and_remove_from_autoscaling_group(cluster_name, container_instanc
         if not 'DRAINING' in container_instance_state:
             logging.warning("Container Instance not in DRAINING state - unexpected, but continuing anyway")
         result += '%s: ' % instance_id
-        ASG = SESSION.client('autoscaling')
         if not dryrun:
             activity_result = ASG.terminate_instance_in_auto_scaling_group(InstanceId=instance_id,
                                                                            ShouldDecrementDesiredCapacity=True)
@@ -162,10 +190,10 @@ def _terminate_and_remove_from_autoscaling_group(cluster_name, container_instanc
     return result
 
 
-def scale_down_ecs_cluster(count, cluster_name=None, dryrun=False):
+def scale_down_ecs_cluster(decrease_count, cluster_name=None, dryrun=False):
     '''
     Scale down the given ECS cluster by the count given
-    :param count: number of instances to remove from cluster
+    :param decrease_count: number of instances to remove from cluster
     :param cluster_name: name of the cluster to scale down
     :param dryrun: dryrun only - no changes
     :return: Boolean Success
@@ -176,21 +204,43 @@ def scale_down_ecs_cluster(count, cluster_name=None, dryrun=False):
     if len(_get_instances_in_cluster(cluster_name, status='DRAINING')) > 0:
         logging.error("Cluster contains instance(s) in DRAINING state - aborting")
         return False
-    logging.info("Asked to scale down cluster by a count of %s" % str(count))
+    logging.info("Asked to scale down cluster by a count of %s" % str(decrease_count))
     # Get an ordered list of instances in the cluster
     instance_list = _get_instances_in_least_loaded_order(cluster_name=cluster_name)
-    logging.debug("Cluster instance list: %s" % str(instance_list))
     instance_count = len(instance_list)
+    if instance_count <= 0:
+        logging.error("No instances in cluster! Aborting")
+        return False
+
+    logging.info("Current cluster size: %s" % str(instance_count))
+
+    logging.debug("Cluster instance list: %s" % str(instance_list))
+
+    # Query an instance in the cluster for the Autoscaling Group Name
+    instance_to_query = _get_instance_id(cluster_name, instance_list[0])
+    asg_name = _get_autoscaling_group_name(instance_to_query)
+    if asg_name:
+        min_cluster_size = int(_get_autoscaling_group_min_size(asg_name))
+        logging.info("Determined minimum cluster size to be %s" % str(min_cluster_size))
+    else:
+        logging.warning("Unable to determine minimum cluster size, defaulting to 1")
+        min_cluster_size = 1
+
     logging.debug("Cluster instance count: %s" % str(instance_count))
-    if instance_count < count:
-        # fewer instances present than reduction count
-        logging.warn("Given count, %s, greater than current number of instances in the cluster" % str(count))
-        logging.warn("Will drain all but 1 instance in the cluster")
-        # Drain all but 1 instance
-        count = len(instance_list) - 1
+
+    if instance_count <= min_cluster_size:
+        logging.error("Cluster is already at or below minimum size - unable to scale down further - aborting")
+        return False
+
+    if instance_count - decrease_count < min_cluster_size:
+        # need to recalculate decrease_count
+        logging.warn("Decreaseing cluster by the given count, %s, would result in cluster dropping below minimum size" % str(decrease_count))
+        decrease_count = instance_count - min_cluster_size
+        logging.warn("Cluster min size is %s, current size is %s, can decrease by a maximum of %s" % (min_cluster_size, instance_count, decrease_count))
+
     # Drain the least loaded instances
-    if instance_count - count > 0:
-        terminate_list = instance_list[:count]
+    if decrease_count > 0:
+        terminate_list = instance_list[:decrease_count]
         _start_draining_instances(cluster_name, terminate_list, dryrun)
     else:
         logging.error("Not enough instances in cluster to reduce size")
@@ -269,6 +319,7 @@ if __name__ == "__main__":
 
     SESSION = boto3.session.Session(profile_name=args.profile, region_name=args.region)
     ECS = SESSION.client('ecs')
+    ASG = SESSION.client('autoscaling')
 
     if args.alarm_name:
         cw = SESSION.client('cloudwatch')
@@ -287,6 +338,6 @@ if __name__ == "__main__":
     else:
         logging.warning("MAX-WAIT of %s hour(s) specified - any tasks still running after this time will be killed when the instance is terminated" % args.max_wait)
 
-    scale_down_ecs_cluster(count=args.count,
+    scale_down_ecs_cluster(decrease_count=args.count,
                            cluster_name=args.cluster_name,
                            dryrun=args.dryrun)

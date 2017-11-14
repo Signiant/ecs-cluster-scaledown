@@ -98,4 +98,4 @@ In the above example, we tell the task to scale down the cluster by 1 instance (
 given, so it uses the default of 1). The first thing the task will do is check the StateValue of the given
 alarm to make sure it is in 'ALARM' state before proceeding - if it isn't, the task exits immediately.
 No max-wait argument is given, so this task will wait indefinitely for tasks on the selected instance to
-  finish before terminating that instance.
+finish before terminating that instance.
