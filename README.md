@@ -10,7 +10,7 @@ depending on how the autoscaling is configured.
 
 While manually scaling the cluster down is possible, it's certainly a pain. Obviously the solution is
 to automate the process. This solution will perform the following steps to scale down an ECS cluster:
-* get a list of the instances in the given cluster, and ordered them by load (number of tasks)
+* get a list of the instances in the given cluster, and order them by load (number of tasks)
 * put X number of instances into a DRAINING state
 * wait for the instances to be ready to terminate
 * terminate the instances and decrement the desired count in the autoscaling group
@@ -99,3 +99,7 @@ given, so it uses the default of 1). The first thing the task will do is check t
 alarm to make sure it is in 'ALARM' state before proceeding - if it isn't, the task exits immediately.
 No max-wait argument is given, so this task will wait indefinitely for tasks on the selected instance to
 finish before terminating that instance.
+
+# Warnings / Known Issues
+
+While this is selectively terminating instances, if the ECS cluster / Autoscaling group is set up with multiple availability zones, terminating one or more instances in a given availability zone can result in an imbalance between the zones. This, in turn, can result in a new instance being launched to blaance the zones, and then a random instance being terminated to keep the cluster size in line with the desired count.
