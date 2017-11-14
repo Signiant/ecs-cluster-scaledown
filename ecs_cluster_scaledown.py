@@ -5,6 +5,7 @@ from operator import itemgetter
 import datetime
 import pytz
 import time
+import sys
 
 logging.getLogger('botocore').setLevel(logging.CRITICAL)
 
@@ -175,6 +176,7 @@ def scale_down_ecs_cluster(count, cluster_name=None, dryrun=False):
     if len(_get_instances_in_cluster(cluster_name, status='DRAINING')) > 0:
         logging.error("Cluster contains instance(s) in DRAINING state - aborting")
         return False
+    logging.info("Asked to scale down cluster by a count of %s" % str(count))
     # Get an ordered list of instances in the cluster
     instance_list = _get_instances_in_least_loaded_order(cluster_name=cluster_name)
     logging.debug("Cluster instance list: %s" % str(instance_list))
@@ -235,6 +237,7 @@ if __name__ == "__main__":
     parser.add_argument("--cluster-name", help="Cluster name", dest='cluster_name', required=True)
     parser.add_argument("--count", help="Number of instances to remove [1]", dest='count', type=int, default=1, required=False)
     parser.add_argument("--max-wait", help="Maximum wait time (hours) [unlimited]", dest='max_wait', default=0, required=False)
+    parser.add_argument("--alarm-name", help="Alarm name to check if scale down should be attempted", dest='alarm_name', required=False)
     parser.add_argument("--region", help="The AWS region the cluster is in", dest='region', required=True)
     parser.add_argument("--profile", help="The name of an aws cli profile to use.", dest='profile', default=None, required=False)
     parser.add_argument("--verbose", help="Turn on DEBUG logging", action='store_true', required=False)
@@ -264,6 +267,17 @@ if __name__ == "__main__":
     logger.addHandler(fh)
     logger.addHandler(ch)
 
+    SESSION = boto3.session.Session(profile_name=args.profile, region_name=args.region)
+    ECS = SESSION.client('ecs')
+
+    if args.alarm_name:
+        cw = SESSION.client('cloudwatch')
+        query_result = cw.describe_alarms(AlarmNames=[args.alarm_name], StateValue='ALARM')
+        matching_alarms = query_result['MetricAlarms']
+        if len(matching_alarms) == 0:
+            logging.error("Given alarm is NOT in alarm state - will NOT attempt to scale down cluster")
+            sys.exit(1)
+
     MAX_WAIT = 0
     if args.max_wait != 0:
         MAX_WAIT = args.max_wait # Hours
@@ -272,11 +286,6 @@ if __name__ == "__main__":
         logging.warning("No MAX-WAIT specified - task could run for a LONG time")
     else:
         logging.warning("MAX-WAIT of %s hour(s) specified - any tasks still running after this time will be killed when the instance is terminated" % args.max_wait)
-
-    SESSION = boto3.session.Session(profile_name=args.profile, region_name=args.region)
-    ECS = SESSION.client('ecs')
-
-    # TODO: Check the value of a custom cloudwatch metrics to see if scaledown should be attempted or not
 
     scale_down_ecs_cluster(count=args.count,
                            cluster_name=args.cluster_name,
