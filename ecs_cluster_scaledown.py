@@ -27,6 +27,7 @@ def _get_instances_in_cluster(cluster_name, next_token=None, status=None):
         if 'HTTPStatusCode' in query_result['ResponseMetadata']:
             if query_result['ResponseMetadata']['HTTPStatusCode'] == 200:
                 if 'nextToken' in query_result:
+                    result.extend(query_result['containerInstanceArns'])
                     result.extend(_get_instances_in_cluster(cluster_name=cluster_name,
                                                             next_token=query_result['nextToken'],
                                                             status=status))
