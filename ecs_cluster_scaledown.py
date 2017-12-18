@@ -331,7 +331,7 @@ if __name__ == "__main__":
         matching_alarms = query_result['MetricAlarms']
         logging.debug('Found %s alarms in ALARM state' % str(len(matching_alarms)))
         if len(matching_alarms) == 0:
-            logging.error("Given alarm is NOT in alarm state - will NOT attempt to scale down cluster")
+            logging.error("Given alarm (%s) is NOT in alarm state - will NOT attempt to scale down cluster" % args.arlam_name)
             sys.exit(1)
 
     MAX_WAIT = 0
