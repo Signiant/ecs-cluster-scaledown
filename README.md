@@ -22,7 +22,7 @@ to automate the process. This solution will perform the following steps to scale
 # Usage
 
 The easiest way to run the tool is from docker (because docker rocks).
-You will need to  pass in variables specific to the ECS task you want to affect
+You will need to pass in variables specific to the ECS task you want to affect
 
 ```bash
 usage: ecs_cluster_scaledown.py [-h] [--aws-access-key-id AWS_ACCESS_KEY]
@@ -74,7 +74,7 @@ In this example, the arguments after the image name are
 * --count <Number of instances to scale down by>
 * --max-wait <max wait time until forcing termination in hours>
 * --region <AWS region>
-* --dryrun (don't actually kill any tasks - display only)
+* --dryrun (don't actually scale down - display only)
 
 In the above example, we tell the task to scale down the cluster by 2 instances. If the currently
 running tasks on whatever instances are selected (the least loaded at the time this task is started)
@@ -102,4 +102,4 @@ finish before terminating that instance.
 
 # Warnings / Known Issues
 
-While this is selectively terminating instances, if the ECS cluster / Autoscaling group is set up with multiple availability zones, terminating one or more instances in a given availability zone can result in an imbalance between the zones. This, in turn, can result in a new instance being launched to blaance the zones, and then a random instance being terminated to keep the cluster size in line with the desired count.
+While this is selectively terminating instances, if the ECS cluster / Autoscaling group is set up with multiple availability zones, terminating one or more instances in a given availability zone can result in an imbalance between the zones. This, in turn, can result in a new instance being launched to balance the zones, and then a random instance being terminated to keep the cluster size in line with the desired count.
