@@ -325,8 +325,10 @@ if __name__ == "__main__":
 
     if args.alarm_name:
         cw = SESSION.client('cloudwatch')
+        logging.debug('Querying for alarm with name %s in ALARM state in the %s region' % (args.alarm_name, args.region))
         query_result = cw.describe_alarms(AlarmNames=[args.alarm_name], StateValue='ALARM')
         matching_alarms = query_result['MetricAlarms']
+        logging.debug('Found %s alarms in ALARM state' % str(len(matching_alarms)))
         if len(matching_alarms) == 0:
             logging.error("Given alarm is NOT in alarm state - will NOT attempt to scale down cluster")
             sys.exit(1)
