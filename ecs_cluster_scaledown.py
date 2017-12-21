@@ -44,6 +44,15 @@ def _get_instance_id(cluster_name, container_instance_id):
     return instance_id
 
 
+def _get_container_instance_id(cluster_name, instance_id):
+    query_result = ECS.list_container_instances(cluster=cluster_name)
+    container_instance_id = None
+    for ci in query_result['containerInstanceArns']:
+        if _get_instance_id(cluster_name, ci) == instance_id:
+            container_instance_id = ci
+    return container_instance_id
+
+
 def _get_autoscaling_group_name(instance_id):
     EC2 = SESSION.client('ec2')
     asg_name = None
@@ -118,7 +127,7 @@ def _start_draining_instances(cluster_name, container_instance_id_list, dryrun=F
         else:
             return True
     else:
-        logging.warning("Dryrun selected - will NOT put instances in DRAINING state")
+        logging.warning("Dryrun selected - will NOT put instances into DRAINING state")
 
 
 def _get_instance_tasks(cluster_name, container_instance_id, next_token=None):
@@ -192,6 +201,41 @@ def _terminate_and_remove_from_autoscaling_group(cluster_name, container_instanc
     return result
 
 
+def remove_instance_from_ecs_cluster(cluster_name, instance_id, dryrun=False):
+    # Check to make sure there are no instances in the cluster that are in a DRAINING state before starting
+    if len(_get_instances_in_cluster(cluster_name, status='DRAINING')) > 0:
+        logging.error("Cluster contains instance(s) in DRAINING state - aborting")
+        return False
+
+    logging.info("Asked to remove instance with ID %s from cluster" % instance_id)
+
+    container_instance_id = _get_container_instance_id(cluster_name, instance_id)
+    logging.debug("Instance's container instance ARN is: %s" % container_instance_id)
+    _start_draining_instances(cluster_name, [container_instance_id], dryrun)
+
+    logging.info("Logging start time...")
+    timer_start_utc = datetime.datetime.now(pytz.UTC)
+    complete = False
+    while not complete:
+        if _can_be_terminated(cluster_name, container_instance_id):
+            result = _terminate_and_remove_from_autoscaling_group(cluster_name, container_instance_id, dryrun)
+            logging.info(result)
+            complete = True
+        if MAX_WAIT > 0:
+            running_time = time_now_utc = datetime.datetime.now(pytz.UTC) - timer_start_utc
+            running_time_seconds = running_time.total_seconds()
+            running_time_hours = int(running_time_seconds // 3600)
+            if running_time_hours > MAX_WAIT:
+                logging.warning("MAX-WAIT time hit - terminating remaining instances")
+                result = _terminate_and_remove_from_autoscaling_group(cluster_name, container_instance_id, dryrun)
+                logging.info(result)
+                complete = True
+        if not complete:
+            logging.debug("Sleeping for 60 seconds")
+            time.sleep(60)
+    return True
+
+
 def scale_down_ecs_cluster(decrease_count, cluster_name=None, dryrun=False):
     '''
     Scale down the given ECS cluster by the count given
@@ -248,9 +292,8 @@ def scale_down_ecs_cluster(decrease_count, cluster_name=None, dryrun=False):
         logging.error("Not enough instances in cluster to reduce size")
         return False
     # Wait for the instances to be drained - only logspout task left
-    if MAX_WAIT > 0:
-        logging.info("Logging start time...")
-        timer_start_utc = datetime.datetime.now(pytz.UTC)
+    logging.info("Logging start time...")
+    timer_start_utc = datetime.datetime.now(pytz.UTC)
     complete = False
     while not complete:
         for inst in terminate_list[:]:
@@ -288,6 +331,7 @@ if __name__ == "__main__":
     parser.add_argument("--aws-secret-access-key", help="AWS Secret Access Key", dest='aws_secret_key', required=False)
     parser.add_argument("--cluster-name", help="Cluster name", dest='cluster_name', required=True)
     parser.add_argument("--count", help="Number of instances to remove [1]", dest='count', type=int, default=1, required=False)
+    parser.add_argument("--instance-id", help="Instance ID to be removed", dest='instance_id', required=False)
     parser.add_argument("--max-wait", help="Maximum wait time (hours) [unlimited]", dest='max_wait', default=0, required=False)
     parser.add_argument("--alarm-name", help="Alarm name to check if scale down should be attempted", dest='alarm_name', required=False)
     parser.add_argument("--region", help="The AWS region the cluster is in", dest='region', required=True)
@@ -343,6 +387,11 @@ if __name__ == "__main__":
     else:
         logging.warning("MAX-WAIT of %s hour(s) specified - any tasks still running after this time will be killed when the instance is terminated" % args.max_wait)
 
-    scale_down_ecs_cluster(decrease_count=args.count,
-                           cluster_name=args.cluster_name,
-                           dryrun=args.dryrun)
+    if args.instance_id:
+        remove_instance_from_ecs_cluster(cluster_name=args.cluster_name,
+                                         instance_id=args.instance_id,
+                                         dryrun=args.dryrun)
+    else:
+        scale_down_ecs_cluster(decrease_count=args.count,
+                               cluster_name=args.cluster_name,
+                               dryrun=args.dryrun)
