@@ -202,16 +202,15 @@ def _terminate_and_remove_from_autoscaling_group(cluster_name, container_instanc
 
 
 def remove_instance_from_ecs_cluster(cluster_name, instance_id, dryrun=False):
-    # Check to make sure there are no instances in the cluster that are in a DRAINING state before starting
-    if len(_get_instances_in_cluster(cluster_name, status='DRAINING')) > 0:
-        logging.error("Cluster contains instance(s) in DRAINING state - aborting")
-        return False
-
     logging.info("Asked to remove instance with ID %s from cluster" % instance_id)
 
     container_instance_id = _get_container_instance_id(cluster_name, instance_id)
     logging.debug("Instance's container instance ARN is: %s" % container_instance_id)
-    _start_draining_instances(cluster_name, [container_instance_id], dryrun)
+
+    # Make sure instance in question is in DRAINING state before continuing
+    if not container_instance_id in _get_instances_in_cluster(cluster_name, status='DRAINING'):
+        logging.error("Instance %s not in DRAINING state - aborting" % instance_id)
+        return False
 
     logging.info("Logging start time...")
     timer_start_utc = datetime.datetime.now(pytz.UTC)
