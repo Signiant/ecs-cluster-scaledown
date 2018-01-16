@@ -15,6 +15,9 @@ to automate the process. This solution will perform the following steps to scale
 * wait for the instances to be ready to terminate
 * terminate the instances and decrement the desired count in the autoscaling group
  
+Alternatively, an instance ID can be specified to be selectively removed from the cluster. Note that this
+instance MUST be in a DRAINING state already.
+
 # Prerequisites
 * Docker must be installed
 * Either an AWS role (if running on EC2) or an access key/secret key
@@ -28,6 +31,7 @@ You will need to pass in variables specific to the ECS task you want to affect
 usage: ecs_cluster_scaledown.py [-h] [--aws-access-key-id AWS_ACCESS_KEY]
                                 [--aws-secret-access-key AWS_SECRET_KEY]
                                 --cluster-name CLUSTER_NAME [--count COUNT]
+                                [--instance-id INSTANCE_ID]
                                 [--max-wait MAX_WAIT]
                                 [--alarm-name ALARM_NAME] --region REGION
                                 [--profile PROFILE] [--verbose] [--dryrun]
@@ -43,6 +47,8 @@ optional arguments:
   --cluster-name CLUSTER_NAME
                         Cluster name
   --count COUNT         Number of instances to remove [1]
+  --instance-id INSTANCE_ID
+                        Instance ID to be removed
   --max-wait MAX_WAIT   Maximum wait time (hours) [unlimited]
   --alarm-name ALARM_NAME
                         Alarm name to check if scale down should be attempted
