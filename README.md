@@ -28,6 +28,7 @@ You will need to pass in variables specific to the ECS task you want to affect
 usage: ecs_cluster_scaledown.py [-h] [--aws-access-key-id AWS_ACCESS_KEY]
                                 [--aws-secret-access-key AWS_SECRET_KEY]
                                 --cluster-name CLUSTER_NAME [--count COUNT]
+                                [--instance-ids INSTANCE_IDS [INSTANCE_IDS ...]]
                                 [--max-wait MAX_WAIT]
                                 [--alarm-name ALARM_NAME] --region REGION
                                 [--profile PROFILE] [--verbose] [--dryrun]
@@ -43,6 +44,8 @@ optional arguments:
   --cluster-name CLUSTER_NAME
                         Cluster name
   --count COUNT         Number of instances to remove [1]
+  --instance-ids INSTANCE_IDS [INSTANCE_IDS ...]
+                        Instance ID(s) to be removed
   --max-wait MAX_WAIT   Maximum wait time (hours) [unlimited]
   --alarm-name ALARM_NAME
                         Alarm name to check if scale down should be attempted
@@ -99,6 +102,20 @@ given, so it uses the default of 1). The first thing the task will do is check t
 alarm to make sure it is in 'ALARM' state before proceeding - if it isn't, the task exits immediately.
 No max-wait argument is given, so this task will wait indefinitely for tasks on the selected instance to
 finish before terminating that instance.
+
+```bash
+docker run \
+  -e AWS_ACCESS_KEY_ID=XXXXXX \
+  -e AWS_SECRET_ACCESS_KEY=XXXXX \
+  signiant/ecs-cluster-scaledown \
+        --cluster-name test-cluster \
+        --region us-east-1 \
+        --instance-ids i-0x1x2x3x4x5x6x7x8 i-0x2x3x4x5x6x7x8x9 i-3x4x5x6x7x8x9x0x1
+```
+
+In the above example, we tell the task to scale down the cluster by the given instances. Since no max-wait
+argument is given, the task will wait indefinitely for tasks to finish before terminating the instance. Note
+that instances will be removed in the order they are listed.
 
 # Warnings / Known Issues
 
