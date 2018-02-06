@@ -15,6 +15,9 @@ to automate the process. This solution will perform the following steps to scale
 * wait for the instances to be ready to terminate
 * terminate the instances and decrement the desired count in the autoscaling group
  
+Alternatively, an instance ID can be specified to be selectively removed from the cluster. Note that this
+instance MUST be in a DRAINING state already.
+
 # Prerequisites
 * Docker must be installed
 * Either an AWS role (if running on EC2) or an access key/secret key
