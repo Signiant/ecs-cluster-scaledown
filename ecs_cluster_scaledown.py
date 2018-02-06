@@ -230,8 +230,12 @@ def remove_instance_from_ecs_cluster(cluster_name, instance_id, dryrun=False):
                 logging.info(result)
                 complete = True
         if not complete:
-            logging.debug("Sleeping for 60 seconds")
-            time.sleep(60)
+            if not dryrun:
+                logging.info("Instance %s not ready to be terminated - Sleeping for 60 seconds" % instance_id)
+                time.sleep(60)
+            else:
+                logging.warning("Instance %s not ready to be terminated - dryrun selected - not waiting..." % instance_id)
+                complete = True
     return True
 
 
@@ -330,7 +334,7 @@ if __name__ == "__main__":
     parser.add_argument("--aws-secret-access-key", help="AWS Secret Access Key", dest='aws_secret_key', required=False)
     parser.add_argument("--cluster-name", help="Cluster name", dest='cluster_name', required=True)
     parser.add_argument("--count", help="Number of instances to remove [1]", dest='count', type=int, default=1, required=False)
-    parser.add_argument("--instance-id", help="Instance ID to be removed", dest='instance_id', required=False)
+    parser.add_argument("--instance-ids", help="Instance ID(s) to be removed", dest='instance_ids', nargs='+', required=False)
     parser.add_argument("--max-wait", help="Maximum wait time (hours) [unlimited]", dest='max_wait', default=0, required=False)
     parser.add_argument("--alarm-name", help="Alarm name to check if scale down should be attempted", dest='alarm_name', required=False)
     parser.add_argument("--region", help="The AWS region the cluster is in", dest='region', required=True)
@@ -386,10 +390,11 @@ if __name__ == "__main__":
     else:
         logging.warning("MAX-WAIT of %s hour(s) specified - any tasks still running after this time will be killed when the instance is terminated" % args.max_wait)
 
-    if args.instance_id:
-        remove_instance_from_ecs_cluster(cluster_name=args.cluster_name,
-                                         instance_id=args.instance_id,
-                                         dryrun=args.dryrun)
+    if args.instance_ids:
+        for instance in args.instance_ids:
+            remove_instance_from_ecs_cluster(cluster_name=args.cluster_name,
+                                             instance_id=instance,
+                                             dryrun=args.dryrun)
     else:
         scale_down_ecs_cluster(decrease_count=args.count,
                                cluster_name=args.cluster_name,
