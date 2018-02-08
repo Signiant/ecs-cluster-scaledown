@@ -206,7 +206,7 @@ def _terminate_and_remove_from_autoscaling_group(cluster_name, container_instanc
             result += "%s" % activity_result['Activity']['StatusCode']
         else:
             logging.warning("Dryrun selected - no modifications will be done")
-            result += "Successful terminated and removed %s - dryrun" % instance_id
+            result += "Successfully terminated and removed %s - dryrun" % instance_id
     return result
 
 
@@ -241,7 +241,6 @@ def remove_instance_from_ecs_cluster(cluster_name, instance_id, dryrun=False):
         if not complete:
             if not dryrun:
                 logging.info("Instance %s not ready to be terminated - Sleeping for 60 seconds" % instance_id)
-                logging.debug("Sleeping for 60 seconds")
                 time.sleep(60)
             else:
                 logging.warning("Instance %s not ready to be terminated - dryrun selected - not waiting..." % instance_id)
