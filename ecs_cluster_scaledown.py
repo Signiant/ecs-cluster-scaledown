@@ -44,6 +44,15 @@ def _get_instance_id(cluster_name, container_instance_id):
     return instance_id
 
 
+def _get_instance_az(instance_id):
+    query_result = EC2.describe_instances(InstanceIds=[instance_id])
+    az = None
+    if 'Reservations' in query_result:
+        if 'Instances' in query_result['Reservations'][0]:
+            az = query_result['Reservations'][0]['Instances'][0]['Placement']['AvailabilityZone']
+    return az
+
+
 def _get_container_instance_id(cluster_name, instance_id):
     query_result = ECS.list_container_instances(cluster=cluster_name)
     container_instance_id = None
@@ -82,22 +91,22 @@ def _get_instance_task_count(cluster_name, container_instance_id):
     return number_of_tasks
 
 
-def _get_instances_in_least_loaded_order(cluster_name):
-    ''' Return a list of instances in the cluster, ordered by number of tasks running on each '''
-    return_instance_list = []
+def _get_sorted_instance_list_with_info(cluster_name):
+    ''' Return a list of instance objects in the cluster, ordered by number of tasks running on each '''
     cluster_instance_list = _get_instances_in_cluster(cluster_name)
     unsorted_instance_list = []
     for instance in cluster_instance_list:
         number_of_tasks = _get_instance_task_count(cluster_name, instance)
+        instance_id = _get_instance_id(cluster_name, instance)
+        instance_az = _get_instance_az(instance_id)
         item = {
-            'container_instance_id' : instance,
+            'container_instance_id': instance,
+            'az': instance_az,
             'task_count': number_of_tasks
         }
         unsorted_instance_list.append(item)
     sorted_instance_list = sorted(unsorted_instance_list, key=itemgetter('task_count'))
-    for instance in sorted_instance_list:
-        return_instance_list.append(instance['container_instance_id'])
-    return return_instance_list
+    return sorted_instance_list
 
 
 def _start_draining_instances(cluster_name, container_instance_id_list, dryrun=False):
@@ -176,7 +185,7 @@ def _can_be_terminated(cluster_name, container_instance_id):
                 return True
     else:
         # More than 1 task - no good
-        logging.debug("More than one task on this instance - can NOT be terminated")
+        logging.warn("More than one task on this instance - can NOT be terminated")
         return False
 
 
@@ -197,7 +206,7 @@ def _terminate_and_remove_from_autoscaling_group(cluster_name, container_instanc
             result += "%s" % activity_result['Activity']['StatusCode']
         else:
             logging.warning("Dryrun selected - no modifications will be done")
-            result += "Successful dryrun"
+            result += "Successfully terminated and removed %s - dryrun" % instance_id
     return result
 
 
@@ -255,18 +264,18 @@ def scale_down_ecs_cluster(decrease_count, cluster_name=None, dryrun=False):
         return False
     logging.info("Asked to scale down cluster by a count of %s" % str(decrease_count))
     # Get an ordered list of instances in the cluster
-    instance_list = _get_instances_in_least_loaded_order(cluster_name=cluster_name)
-    instance_count = len(instance_list)
+    ordered_instances = _get_sorted_instance_list_with_info(cluster_name=cluster_name)
+    container_instance_list = []
+    for instance in ordered_instances:
+        container_instance_list.append(instance['container_instance_id'])
+    logging.debug("Cluster instance list: %s" % str(ordered_instances))
+    instance_count = len(container_instance_list)
     if instance_count <= 0:
         logging.error("No instances in cluster! Aborting")
         return False
 
-    logging.info("Current cluster size: %s" % str(instance_count))
-
-    logging.debug("Cluster instance list: %s" % str(instance_list))
-
     # Query an instance in the cluster for the Autoscaling Group Name
-    instance_to_query = _get_instance_id(cluster_name, instance_list[0])
+    instance_to_query = _get_instance_id(cluster_name, container_instance_list[0])
     asg_name = _get_autoscaling_group_name(instance_to_query)
     if asg_name:
         min_cluster_size = int(_get_autoscaling_group_min_size(asg_name))
@@ -275,31 +284,66 @@ def scale_down_ecs_cluster(decrease_count, cluster_name=None, dryrun=False):
         logging.warning("Unable to determine minimum cluster size, defaulting to 1")
         min_cluster_size = 1
 
-    logging.debug("Cluster instance count: %s" % str(instance_count))
-
     if instance_count <= min_cluster_size:
         logging.error("Cluster is already at or below minimum size - unable to scale down further - aborting")
         return False
 
     if instance_count - decrease_count < min_cluster_size:
         # need to recalculate decrease_count
-        logging.warn("Decreaseing cluster by the given count, %s, would result in cluster dropping below minimum size" % str(decrease_count))
+        logging.warn("Decreasing cluster by the given count, %s, would result in cluster dropping below minimum size" % str(decrease_count))
         decrease_count = instance_count - min_cluster_size
         logging.warn("Cluster min size is %s, current size is %s, can decrease by a maximum of %s" % (min_cluster_size, instance_count, decrease_count))
 
-    # Drain the least loaded instances
-    if decrease_count > 0:
-        terminate_list = instance_list[:decrease_count]
-        _start_draining_instances(cluster_name, terminate_list, dryrun)
-    else:
+    if decrease_count <= 0:
         logging.error("Not enough instances in cluster to reduce size")
         return False
+
+    logging.info("Current cluster size: %s" % str(instance_count))
+
+    # Determine number of instances in each az
+    azs = {}
+    for instance in ordered_instances:
+        az_name = instance['az']
+        if not az_name in azs:
+            azs[az_name] = []
+        azs[az_name].append(instance['container_instance_id'])
+
+    for az in azs:
+        logging.info("   Count in %s: %s" % (az, len(azs[az])))
+
+    terminate_list = []
+    # Only handle 2 AZs for now
+    if len(azs) == 1:
+        # only one availability zone in use - just remove the top entry
+        terminate_list = container_instance_list[:decrease_count]
+    elif len(azs) == 2:
+        az_names = []
+        for az in azs:
+            az_names.append(az)
+        for x in range(0,decrease_count):
+            # two availability zones in use
+            if len(azs[az_names[0]]) > len(azs[az_names[1]]) or len(azs[az_names[0]]) == len(azs[az_names[1]]):
+                # first group is greater than or equal to the second group - first take from group 1
+                instance_to_terminate = azs[az_names[0]].pop(0)
+                terminate_list.append(instance_to_terminate)
+            else:
+                # first group is smaller than the second group - first take from group 2
+                instance_to_terminate = azs[az_names[1]].pop(0)
+                terminate_list.append(instance_to_terminate)
+    else:
+        logging.error("Can't handle 3 availability zones currently")
+
+    logging.debug("Terminate instance list: %s" % str(terminate_list))
+    # Drain the least loaded instances
+    _start_draining_instances(cluster_name, terminate_list, dryrun)
+
     # Wait for the instances to be drained - only logspout task left
     logging.info("Logging start time...")
     timer_start_utc = datetime.datetime.now(pytz.UTC)
     complete = False
     while not complete:
         for inst in terminate_list[:]:
+            logging.debug("Selected instance %s (%s) to be terminated" % (_get_instance_id(cluster_name, inst), inst))
             if _can_be_terminated(cluster_name, inst):
                 result = _terminate_and_remove_from_autoscaling_group(cluster_name, inst, dryrun)
                 logging.info(result)
@@ -319,8 +363,13 @@ def scale_down_ecs_cluster(decrease_count, cluster_name=None, dryrun=False):
                     terminate_list.remove(inst)
                 complete = True
         if not complete:
-            logging.debug("Sleeping for 60 seconds")
-            time.sleep(60)
+            if not dryrun:
+                logging.info("Instance not ready to be terminated - Sleeping for 60 seconds")
+                logging.debug("Sleeping for 60 seconds")
+                time.sleep(60)
+            else:
+                logging.warning("   Instance not ready to be terminated - dryrun selected - not waiting...")
+                complete = True
     return True
 
 
@@ -368,6 +417,7 @@ if __name__ == "__main__":
 
     SESSION = boto3.session.Session(profile_name=args.profile, region_name=args.region)
     ECS = SESSION.client('ecs')
+    EC2 = SESSION.client('ec2')
     ASG = SESSION.client('autoscaling')
 
     if args.alarm_name:
