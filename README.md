@@ -122,4 +122,4 @@ that instances will be removed in the order they are listed.
 
 # Warnings / Known Issues
 
-While this is selectively terminating instances, if the ECS cluster / Autoscaling group is set up with multiple availability zones, terminating one or more instances in a given availability zone can result in an imbalance between the zones. This, in turn, can result in a new instance being launched to balance the zones, and then a random instance being terminated to keep the cluster size in line with the desired count.
+Current only handles clusters that contain instances in a maximum of 2 availability zones.
