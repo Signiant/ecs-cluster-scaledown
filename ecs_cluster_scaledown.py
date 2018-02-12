@@ -268,7 +268,7 @@ def scale_down_ecs_cluster(decrease_count, cluster_name=None, dryrun=False):
     container_instance_list = []
     for instance in ordered_instances:
         container_instance_list.append(instance['container_instance_id'])
-    logging.debug("Cluster instance list: %s" % str(ordered_instances))
+    # logging.debug("Cluster instance list: %s" % str(ordered_instances))
     instance_count = len(container_instance_list)
     if instance_count <= 0:
         logging.error("No instances in cluster! Aborting")
@@ -424,11 +424,11 @@ if __name__ == "__main__":
         cw = SESSION.client('cloudwatch')
         logging.debug('Querying for alarm with name %s in ALARM state in the %s region' % (args.alarm_name, args.region))
         query_result = cw.describe_alarms(AlarmNames=[args.alarm_name], StateValue='ALARM')
-        logging.debug(str(query_result))
+        # logging.debug(str(query_result))
         matching_alarms = query_result['MetricAlarms']
         logging.debug('Found %s alarms in ALARM state' % str(len(matching_alarms)))
         if len(matching_alarms) == 0:
-            logging.error("Given alarm (%s) is NOT in alarm state - will NOT attempt to scale down cluster" % args.alarm_name)
+            logging.warning("Given alarm (%s) is NOT in alarm state - will NOT attempt to scale down cluster" % args.alarm_name)
             sys.exit(1)
 
     MAX_WAIT = 0
