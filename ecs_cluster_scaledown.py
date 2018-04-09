@@ -1,10 +1,9 @@
 import logging.handlers
 import argparse
+import botocore
 import boto3
+import json
 from operator import itemgetter
-import datetime
-import pytz
-import time
 import sys
 
 logging.getLogger('botocore').setLevel(logging.CRITICAL)
@@ -93,7 +92,7 @@ def _get_instance_task_count(cluster_name, container_instance_id):
 
 def _get_sorted_instance_list_with_info(cluster_name):
     ''' Return a list of instance objects in the cluster, ordered by number of tasks running on each '''
-    cluster_instance_list = _get_instances_in_cluster(cluster_name)
+    cluster_instance_list = _get_instances_in_cluster(cluster_name, status='ACTIVE')
     unsorted_instance_list = []
     for instance in cluster_instance_list:
         number_of_tasks = _get_instance_task_count(cluster_name, instance)
@@ -113,30 +112,33 @@ def _start_draining_instances(cluster_name, container_instance_id_list, dryrun=F
     ''' Put the given instance in a draining state '''
     logging.debug("Attempting to put the following container instances in a DRAINING state: %s" % str(container_instance_id_list))
     if not dryrun:
-        action_result = ECS.update_container_instances_state(cluster=cluster_name,
-                                                             containerInstances=container_instance_id_list,
-                                                             status='DRAINING')
-        if 'ResponseMetadata' in action_result:
-            if 'HTTPStatusCode' in action_result['ResponseMetadata']:
-                if action_result['ResponseMetadata']['HTTPStatusCode'] != 200:
-                    logging.error("Unexpected HTTPStatusCode - Unable to put instances in DRAINING state")
+        try:
+            action_result = ECS.update_container_instances_state(cluster=cluster_name,
+                                                                 containerInstances=container_instance_id_list,
+                                                                 status='DRAINING')
+            if 'ResponseMetadata' in action_result:
+                if 'HTTPStatusCode' in action_result['ResponseMetadata']:
+                    if action_result['ResponseMetadata']['HTTPStatusCode'] != 200:
+                        logging.error("Unexpected HTTPStatusCode - Unable to put instances in DRAINING state")
+                        return False
+                else:
+                    logging.error("No HTTPStatusCode in response - Unable to put instances in DRAINING state")
                     return False
             else:
-                logging.error("No HTTPStatusCode in response - Unable to put instances in DRAINING state")
+                logging.error("No ResponseMetaData in response - Unable to put instances in DRAINING state")
                 return False
-        else:
-            logging.error("No ResponseMetaData in response - Unable to put instances in DRAINING state")
-            return False
-        # TODO: Check containerInstances returned and verify instances in question are in DRAINING state
-        # If failures list is > 0, print out errors
-        if len(action_result['failures']) > 0:
-            for inst in action_result['failures']:
-                logging.error("Failure putting container instance into DRAINING state: %s" % inst)
-            return False
-        else:
-            return True
+            # TODO: Check containerInstances returned and verify instances in question are in DRAINING state
+            # If failures list is > 0, print out errors
+            if len(action_result['failures']) > 0:
+                for inst in action_result['failures']:
+                    logging.error("Failure putting container instance into DRAINING state: %s" % inst)
+                return False
+            else:
+                return True
+        except botocore.exceptions.ClientError as e:
+            logging.error('Unexpected error: %s' % e)
     else:
-        logging.warning("Dryrun selected - will NOT put instances into DRAINING state")
+        logging.warning("   Dryrun selected - will NOT put instances into DRAINING state")
 
 
 def _get_instance_tasks(cluster_name, container_instance_id, next_token=None):
@@ -159,96 +161,100 @@ def _get_instance_tasks(cluster_name, container_instance_id, next_token=None):
     return result
 
 
-def _can_be_terminated(cluster_name, container_instance_id):
+def _can_be_terminated(cluster_name, container_instance_id, ignore_list=[]):
     '''
     Determine if the given instance can be terminated
     An instance is deemed ready for termination if no tasks are running on it, or
-    only the logspout task is left running on it
+    only tasks matching the ignore_list are left running on it
     '''
     task_count = _get_instance_task_count(cluster_name, container_instance_id)
     if task_count == 0:
         logging.debug("No tasks running on this instance - can be terminated")
         return True
-    elif task_count == 1 :
-        # There is one task running on this instance - see if it's logspout
-        logging.debug("One tasks running on this instance - check if it's logspout")
+    elif task_count <= len(ignore_list):
+        # There are the same number of tasks as the length of the ignore list - check them
+        logging.debug("Number of tasks running on this instance equals the length of the ignore list - check tasks to see if they match")
         task_list = _get_instance_tasks(cluster_name, container_instance_id)
         # Double check number of tasks
-        if len(task_list) > 1:
+        if len(task_list) > len(ignore_list):
+            # Too many tasks
             return False
         else:
             query_result = ECS.describe_tasks(cluster=cluster_name,
                                               tasks=task_list)
-            if 'LogspoutTask' in query_result['tasks'][0]['group']:
-                logging.debug("One task on this instance IS logspout - can be terminated")
-                # It's logspout - we're good
+            running_tasks = query_result['tasks']
+            for task in list(running_tasks):
+                for ignore in ignore_list:
+                    if ignore in task['group']:
+                        logging.debug('Found %s task - ignoring' % ignore)
+                        running_tasks.remove(task)
+                        break
+            # running_tasks should be zero at this point if we can terminate this instance
+            if len(running_tasks) == 0:
+                logging.debug("All tasks running on this instance in ignore list - can be terminated")
                 return True
     else:
-        # More than 1 task - no good
-        logging.warn("More than one task on this instance - can NOT be terminated")
+        # too many tasks
+        logging.warn("Too many tasks on this instance - can NOT be terminated")
         return False
 
 
 def _terminate_and_remove_from_autoscaling_group(cluster_name, container_instance_id, dryrun=False):
     ''' Terminate the given instance and remove it from the autoscaling group while decrementing the desired count '''
-    result = 'Scheduled termination result for instance '
-    query_result = ECS.describe_container_instances(cluster=cluster_name, containerInstances=[container_instance_id])
-    if 'containerInstances' in query_result:
-        instance_id = query_result['containerInstances'][0]['ec2InstanceId']
-        container_instance_state = query_result['containerInstances'][0]['status']
-        logging.debug("Instance %s to be terminated - currently in %s state" % (instance_id, container_instance_state))
-        if not 'DRAINING' in container_instance_state:
-            logging.warning("Container Instance not in DRAINING state - unexpected, but continuing anyway")
-        result += '%s: ' % instance_id
-        if not dryrun:
-            activity_result = ASG.terminate_instance_in_auto_scaling_group(InstanceId=instance_id,
-                                                                           ShouldDecrementDesiredCapacity=True)
-            result += "%s" % activity_result['Activity']['StatusCode']
-        else:
-            logging.warning("Dryrun selected - no modifications will be done")
-            result += "Successfully terminated and removed %s - dryrun" % instance_id
+    result = None
+    try:
+        query_result = ECS.describe_container_instances(cluster=cluster_name, containerInstances=[container_instance_id])
+        result = 'Scheduled termination result for container instance %s: ' % container_instance_id
+        if 'containerInstances' in query_result:
+            instance_id = query_result['containerInstances'][0]['ec2InstanceId']
+            container_instance_state = query_result['containerInstances'][0]['status']
+            logging.debug("Instance %s to be terminated - currently in %s state" % (instance_id, container_instance_state))
+            if not 'DRAINING' in container_instance_state:
+                logging.warning("Container Instance not in DRAINING state - unexpected, but continuing anyway")
+            if not dryrun:
+                activity_result = ASG.terminate_instance_in_auto_scaling_group(InstanceId=instance_id,
+                                                                               ShouldDecrementDesiredCapacity=True)
+                result += "%s" % activity_result['Activity']['StatusCode']
+            else:
+                logging.warning("Dryrun selected - no modifications will be done")
+                result += "Successfully terminated and removed %s - dryrun" % instance_id
+    except botocore.exceptions.ClientError as e:
+        result += 'Unexpected error: %s' % e
+        logging.error('Unexpected error: %s' % e)
     return result
 
 
-def remove_instance_from_ecs_cluster(cluster_name, instance_id, dryrun=False):
-    logging.info("Asked to remove instance with ID %s from cluster" % instance_id)
+def remove_container_instance_from_ecs_cluster(cluster_name, container_instance_id, ignore_list=[], dryrun=False):
+    logging.info("Attempting to remove container instance with ID %s from cluster" % container_instance_id)
 
-    container_instance_id = _get_container_instance_id(cluster_name, instance_id)
-    logging.debug("Instance's container instance ARN is: %s" % container_instance_id)
+    if not dryrun:
+        # Make sure instance in question is in DRAINING state before continuing
+        if not container_instance_id in _get_instances_in_cluster(cluster_name, status='DRAINING'):
+            logging.error("Container Instance %s not in DRAINING state - aborting" % container_instance_id)
+            return False
 
-    # Make sure instance in question is in DRAINING state before continuing
-    if not container_instance_id in _get_instances_in_cluster(cluster_name, status='DRAINING'):
-        logging.error("Instance %s not in DRAINING state - aborting" % instance_id)
-        return False
-
-    logging.info("Logging start time...")
-    timer_start_utc = datetime.datetime.now(pytz.UTC)
-    complete = False
-    while not complete:
-        if _can_be_terminated(cluster_name, container_instance_id):
+        if _can_be_terminated(cluster_name, container_instance_id, ignore_list):
             result = _terminate_and_remove_from_autoscaling_group(cluster_name, container_instance_id, dryrun)
             logging.info(result)
-            complete = True
-        if MAX_WAIT > 0:
-            running_time = time_now_utc = datetime.datetime.now(pytz.UTC) - timer_start_utc
-            running_time_seconds = running_time.total_seconds()
-            running_time_hours = int(running_time_seconds // 3600)
-            if running_time_hours > MAX_WAIT:
-                logging.warning("MAX-WAIT time hit - terminating remaining instances")
-                result = _terminate_and_remove_from_autoscaling_group(cluster_name, container_instance_id, dryrun)
-                logging.info(result)
-                complete = True
-        if not complete:
-            if not dryrun:
-                logging.info("Instance %s not ready to be terminated - Sleeping for 60 seconds" % instance_id)
-                time.sleep(60)
-            else:
-                logging.warning("Instance %s not ready to be terminated - dryrun selected - not waiting..." % instance_id)
-                complete = True
-    return True
+            return True
+        else:
+            logging.info("Container Instance %s not ready to be terminated - will try again later" % container_instance_id)
+            return False
+    else:
+        logging.warning("   Dryrun selected - don't terminate and remove...")
+        return True
 
 
-def scale_down_ecs_cluster(decrease_count, cluster_name=None, dryrun=False):
+def remove_instance_from_ecs_cluster_by_instance_id(cluster_name, instance_id, ignore_list=[], dryrun=False):
+    logging.info("Asked to remove instance with ID %s from cluster" % instance_id)
+    container_instance_id = _get_container_instance_id(cluster_name, instance_id)
+    return remove_container_instance_from_ecs_cluster(cluster_name=cluster_name,
+                                                      container_instance_id=container_instance_id,
+                                                      ignore_list=ignore_list,
+                                                      dryrun=dryrun)
+
+
+def scale_down_ecs_cluster(decrease_count, cluster_name=None, ignore_list=[], dryrun=False):
     '''
     Scale down the given ECS cluster by the count given
     :param decrease_count: number of instances to remove from cluster
@@ -258,17 +264,13 @@ def scale_down_ecs_cluster(decrease_count, cluster_name=None, dryrun=False):
     '''
     if not cluster_name:
         logging.critical("Must provide cluster name")
-    # Check to make sure there are no instances in the cluster that are in a DRAINING state before starting
-    if len(_get_instances_in_cluster(cluster_name, status='DRAINING')) > 0:
-        logging.error("Cluster contains instance(s) in DRAINING state - aborting")
-        return False
     logging.info("Asked to scale down cluster by a count of %s" % str(decrease_count))
     # Get an ordered list of instances in the cluster
     ordered_instances = _get_sorted_instance_list_with_info(cluster_name=cluster_name)
     container_instance_list = []
     for instance in ordered_instances:
         container_instance_list.append(instance['container_instance_id'])
-    # logging.debug("Cluster instance list: %s" % str(ordered_instances))
+    logging.debug("Cluster instance list:\n%s" % json.dumps(ordered_instances, indent=4))
     instance_count = len(container_instance_list)
     if instance_count <= 0:
         logging.error("No instances in cluster! Aborting")
@@ -308,6 +310,8 @@ def scale_down_ecs_cluster(decrease_count, cluster_name=None, dryrun=False):
             azs[az_name] = []
         azs[az_name].append(instance['container_instance_id'])
 
+    logging.debug("AZ dict:\n%s" % json.dumps(azs, indent=4))
+
     for az in azs:
         logging.info("   Count in %s: %s" % (az, len(azs[az])))
 
@@ -315,6 +319,7 @@ def scale_down_ecs_cluster(decrease_count, cluster_name=None, dryrun=False):
     # Only handle 2 AZs for now
     if len(azs) == 1:
         # only one availability zone in use - just remove the top entry
+        logging.debug('Only one availabiliy zone in play - select the least loaded instance')
         terminate_list = container_instance_list[:decrease_count]
     elif len(azs) == 2:
         az_names = []
@@ -325,52 +330,25 @@ def scale_down_ecs_cluster(decrease_count, cluster_name=None, dryrun=False):
             if len(azs[az_names[0]]) > len(azs[az_names[1]]) or len(azs[az_names[0]]) == len(azs[az_names[1]]):
                 # first group is greater than or equal to the second group - first take from group 1
                 instance_to_terminate = azs[az_names[0]].pop(0)
+                logging.debug('Selecting instance from AZ: %s' % az_names[0])
                 terminate_list.append(instance_to_terminate)
             else:
                 # first group is smaller than the second group - first take from group 2
                 instance_to_terminate = azs[az_names[1]].pop(0)
+                logging.debug('Selecting instance from AZ: %s' % az_names[1])
                 terminate_list.append(instance_to_terminate)
     else:
-        logging.error("Can't handle 3 availability zones currently")
+        logging.error("Can't handle more than 2 availability zones currently")
 
     logging.debug("Terminate instance list: %s" % str(terminate_list))
     # Drain the least loaded instances
     _start_draining_instances(cluster_name, terminate_list, dryrun)
 
-    # Wait for the instances to be drained - only logspout task left
-    logging.info("Logging start time...")
-    timer_start_utc = datetime.datetime.now(pytz.UTC)
-    complete = False
-    while not complete:
-        for inst in terminate_list[:]:
-            logging.debug("Selected instance %s (%s) to be terminated" % (_get_instance_id(cluster_name, inst), inst))
-            if _can_be_terminated(cluster_name, inst):
-                result = _terminate_and_remove_from_autoscaling_group(cluster_name, inst, dryrun)
-                logging.info(result)
-                terminate_list.remove(inst)
-        if len(terminate_list) == 0:
-            complete = True
-        if MAX_WAIT > 0:
-            running_time = time_now_utc = datetime.datetime.now(pytz.UTC) - timer_start_utc
-            running_time_seconds = running_time.total_seconds()
-            running_time_minutes = int(running_time_seconds // 60)
-            running_time_hours = int(running_time_seconds // 3600)
-            if running_time_hours > MAX_WAIT:
-                logging.warning("MAX-WAIT time hit - terminating remaining instances")
-                for inst in terminate_list[:]:
-                    result = _terminate_and_remove_from_autoscaling_group(cluster_name, inst, dryrun)
-                    logging.info(result)
-                    terminate_list.remove(inst)
-                complete = True
-        if not complete:
-            if not dryrun:
-                logging.info("Instance not ready to be terminated - Sleeping for 60 seconds")
-                logging.debug("Sleeping for 60 seconds")
-                time.sleep(60)
-            else:
-                logging.warning("   Instance not ready to be terminated - dryrun selected - not waiting...")
-                complete = True
-    return True
+    for inst in terminate_list[:]:
+        remove_container_instance_from_ecs_cluster(cluster_name=args.cluster_name,
+                                                   container_instance_id=inst,
+                                                   ignore_list=ignore_list,
+                                                   dryrun=args.dryrun)
 
 
 if __name__ == "__main__":
@@ -384,7 +362,7 @@ if __name__ == "__main__":
     parser.add_argument("--cluster-name", help="Cluster name", dest='cluster_name', required=True)
     parser.add_argument("--count", help="Number of instances to remove [1]", dest='count', type=int, default=1, required=False)
     parser.add_argument("--instance-ids", help="Instance ID(s) to be removed", dest='instance_ids', nargs='+', required=False)
-    parser.add_argument("--max-wait", help="Maximum wait time (hours) [unlimited]", dest='max_wait', default=0, required=False)
+    parser.add_argument("--ignore-list", help="Tasks to be ignored when determining running tasks", dest='ignore_list', nargs='+',required=False)
     parser.add_argument("--alarm-name", help="Alarm name to check if scale down should be attempted", dest='alarm_name', required=False)
     parser.add_argument("--region", help="The AWS region the cluster is in", dest='region', required=True)
     parser.add_argument("--profile", help="The name of an aws cli profile to use.", dest='profile', default=None, required=False)
@@ -420,32 +398,36 @@ if __name__ == "__main__":
     EC2 = SESSION.client('ec2')
     ASG = SESSION.client('autoscaling')
 
-    if args.alarm_name:
-        cw = SESSION.client('cloudwatch')
-        logging.debug('Querying for alarm with name %s in ALARM state in the %s region' % (args.alarm_name, args.region))
-        query_result = cw.describe_alarms(AlarmNames=[args.alarm_name], StateValue='ALARM')
-        # logging.debug(str(query_result))
-        matching_alarms = query_result['MetricAlarms']
-        logging.debug('Found %s alarms in ALARM state' % str(len(matching_alarms)))
-        if len(matching_alarms) == 0:
-            logging.warning("Given alarm (%s) is NOT in alarm state - will NOT attempt to scale down cluster" % args.alarm_name)
-            sys.exit(1)
+    # Check for instances in DRAINING state and remove them from the cluster if possible
+    logging.info('Checking for any instances in DRAINING state - if found will attempt to remove them from the cluster')
+    draining_instances = _get_instances_in_cluster(args.cluster_name, status='DRAINING')
+    for instance in draining_instances:
+        remove_container_instance_from_ecs_cluster(cluster_name=args.cluster_name,
+                                                   container_instance_id=instance,
+                                                   ignore_list=args.ignore_list,
+                                                   dryrun=args.dryrun)
 
-    MAX_WAIT = 0
-    if args.max_wait != 0:
-        MAX_WAIT = args.max_wait # Hours
+    # providing a count of 0 will simply result in terminating instances is a DRAINING state and not trying to scale down any further
+    if args.count > 0:
+        if args.alarm_name:
+            cw = SESSION.client('cloudwatch')
+            logging.debug('Querying for alarm with name %s in ALARM state in the %s region' % (args.alarm_name, args.region))
+            query_result = cw.describe_alarms(AlarmNames=[args.alarm_name], StateValue='ALARM')
+            # logging.debug(str(query_result))
+            matching_alarms = query_result['MetricAlarms']
+            logging.debug('Found %s alarms in ALARM state' % str(len(matching_alarms)))
+            if len(matching_alarms) == 0:
+                logging.warning("Given alarm (%s) is NOT in alarm state - will NOT attempt to scale down cluster" % args.alarm_name)
+                sys.exit(0)
 
-    if MAX_WAIT == 0:
-        logging.warning("No MAX-WAIT specified - task could run for a LONG time")
-    else:
-        logging.warning("MAX-WAIT of %s hour(s) specified - any tasks still running after this time will be killed when the instance is terminated" % args.max_wait)
-
-    if args.instance_ids:
-        for instance in args.instance_ids:
-            remove_instance_from_ecs_cluster(cluster_name=args.cluster_name,
-                                             instance_id=instance,
-                                             dryrun=args.dryrun)
-    else:
-        scale_down_ecs_cluster(decrease_count=args.count,
-                               cluster_name=args.cluster_name,
-                               dryrun=args.dryrun)
+        if args.instance_ids:
+            for instance in args.instance_ids:
+                remove_instance_from_ecs_cluster_by_instance_id(cluster_name=args.cluster_name,
+                                                                instance_id=instance,
+                                                                ignore_list=args.ignore_list,
+                                                                dryrun=args.dryrun)
+        else:
+            scale_down_ecs_cluster(decrease_count=args.count,
+                                   cluster_name=args.cluster_name,
+                                   ignore_list=args.ignore_list,
+                                   dryrun=args.dryrun)
