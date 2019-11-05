@@ -173,7 +173,7 @@ def _can_be_terminated(cluster_name, container_instance_id, ignore_list=[]):
         return True
     elif task_count <= len(ignore_list):
         # There are the same number of tasks as the length of the ignore list - check them
-        logging.debug("Number of tasks running on this instance equals the length of the ignore list - check tasks to see if they match")
+        logging.debug("%s: Number of tasks running on this instance equals the length of the ignore list - check tasks to see if they match" % cluster_name)
         task_list = _get_instance_tasks(cluster_name, container_instance_id)
         # Double check number of tasks
         if len(task_list) > len(ignore_list):
@@ -186,16 +186,16 @@ def _can_be_terminated(cluster_name, container_instance_id, ignore_list=[]):
             for task in list(running_tasks):
                 for ignore in ignore_list:
                     if ignore in task['group']:
-                        logging.debug('Found %s task - ignoring' % ignore)
+                        logging.debug('   Found %s task - ignoring' % ignore)
                         running_tasks.remove(task)
                         break
             # running_tasks should be zero at this point if we can terminate this instance
             if len(running_tasks) == 0:
-                logging.debug("All tasks running on this instance in ignore list - can be terminated")
+                logging.debug("%s: All tasks running on this instance in ignore list - can be terminated" % cluster_name)
                 return True
     else:
         # too many tasks
-        logging.warn("Too many tasks on this instance - can NOT be terminated")
+        logging.warn("%s: Too many tasks on this instance - can NOT be terminated" % cluster_name)
         return False
 
 
@@ -208,9 +208,9 @@ def _terminate_and_remove_from_autoscaling_group(cluster_name, container_instanc
         if 'containerInstances' in query_result:
             instance_id = query_result['containerInstances'][0]['ec2InstanceId']
             container_instance_state = query_result['containerInstances'][0]['status']
-            logging.debug("Instance %s to be terminated - currently in %s state" % (instance_id, container_instance_state))
+            logging.debug("%s: Instance %s to be terminated - currently in %s state" % (cluster_name, instance_id, container_instance_state))
             if not 'DRAINING' in container_instance_state:
-                logging.warning("Container Instance not in DRAINING state - unexpected, but continuing anyway")
+                logging.warning("%s: Container Instance not in DRAINING state - unexpected, but continuing anyway" % cluster_name)
             if not dryrun:
                 activity_result = ASG.terminate_instance_in_auto_scaling_group(InstanceId=instance_id,
                                                                                ShouldDecrementDesiredCapacity=True)
@@ -225,12 +225,12 @@ def _terminate_and_remove_from_autoscaling_group(cluster_name, container_instanc
 
 
 def remove_container_instance_from_ecs_cluster(cluster_name, container_instance_id, ignore_list=[], dryrun=False):
-    logging.info("Attempting to remove container instance with ID %s from cluster" % container_instance_id)
+    logging.info("%s: Attempting to remove container instance with ID %s from cluster" % (cluster_name, container_instance_id))
 
     if not dryrun:
         # Make sure instance in question is in DRAINING state before continuing
         if not container_instance_id in _get_instances_in_cluster(cluster_name, status='DRAINING'):
-            logging.error("Container Instance %s not in DRAINING state - aborting" % container_instance_id)
+            logging.error("%s: Container Instance %s not in DRAINING state - aborting" % (cluster_name, container_instance_id))
             return False
 
         if _can_be_terminated(cluster_name, container_instance_id, ignore_list):
@@ -238,7 +238,7 @@ def remove_container_instance_from_ecs_cluster(cluster_name, container_instance_
             logging.info(result)
             return True
         else:
-            logging.info("Container Instance %s not ready to be terminated - will try again later" % container_instance_id)
+            logging.info("%s: Container Instance %s not ready to be terminated - will try again later" % (cluster_name, container_instance_id))
             return False
     else:
         logging.warning("   Dryrun selected - don't terminate and remove...")
@@ -339,6 +339,7 @@ def scale_down_ecs_cluster(decrease_count, cluster_name=None, ignore_list=[], dr
                 terminate_list.append(instance_to_terminate)
     else:
         logging.error("Can't handle more than 2 availability zones currently")
+        sys.exit(1)
 
     logging.debug("Terminate instance list: %s" % str(terminate_list))
     # Drain the least loaded instances
@@ -398,8 +399,10 @@ if __name__ == "__main__":
     EC2 = SESSION.client('ec2')
     ASG = SESSION.client('autoscaling')
 
+    logging.info('Starting Scale Down Process for cluster: %s' % args.cluster_name)
+
     # Check for instances in DRAINING state and remove them from the cluster if possible
-    logging.info('Checking for any instances in DRAINING state - if found will attempt to remove them from the cluster')
+    logging.info('%s: Checking for any instances in DRAINING state - if found will attempt to remove them from the cluster' % args.cluster_name)
     draining_instances = _get_instances_in_cluster(args.cluster_name, status='DRAINING')
     for instance in draining_instances:
         remove_container_instance_from_ecs_cluster(cluster_name=args.cluster_name,
