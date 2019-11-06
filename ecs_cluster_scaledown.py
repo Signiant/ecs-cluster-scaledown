@@ -204,7 +204,7 @@ def _terminate_and_remove_from_autoscaling_group(cluster_name, container_instanc
     result = None
     try:
         query_result = ECS.describe_container_instances(cluster=cluster_name, containerInstances=[container_instance_id])
-        result = 'Scheduled termination result for container instance %s: ' % container_instance_id
+        result = '%s: Scheduled termination result for container instance %s: ' % (cluster_name, container_instance_id)
         if 'containerInstances' in query_result:
             instance_id = query_result['containerInstances'][0]['ec2InstanceId']
             container_instance_state = query_result['containerInstances'][0]['status']
@@ -246,7 +246,7 @@ def remove_container_instance_from_ecs_cluster(cluster_name, container_instance_
 
 
 def remove_instance_from_ecs_cluster_by_instance_id(cluster_name, instance_id, ignore_list=[], dryrun=False):
-    logging.info("Asked to remove instance with ID %s from cluster" % instance_id)
+    logging.info("%s: Asked to remove instance with ID %s from cluster" % (cluster_name, instance_id))
     container_instance_id = _get_container_instance_id(cluster_name, instance_id)
     return remove_container_instance_from_ecs_cluster(cluster_name=cluster_name,
                                                       container_instance_id=container_instance_id,
@@ -264,16 +264,16 @@ def scale_down_ecs_cluster(decrease_count, cluster_name=None, ignore_list=[], dr
     '''
     if not cluster_name:
         logging.critical("Must provide cluster name")
-    logging.info("Asked to scale down cluster by a count of %s" % str(decrease_count))
+    logging.info("%s: Asked to scale down cluster by a count of %s" % (cluster_name, str(decrease_count)))
     # Get an ordered list of instances in the cluster
     ordered_instances = _get_sorted_instance_list_with_info(cluster_name=cluster_name)
     container_instance_list = []
     for instance in ordered_instances:
         container_instance_list.append(instance['container_instance_id'])
-    logging.debug("Cluster instance list:\n%s" % json.dumps(ordered_instances, indent=4))
+    logging.debug("%s: Cluster instance list:\n%s" % (cluster_name, json.dumps(ordered_instances, indent=4)))
     instance_count = len(container_instance_list)
     if instance_count <= 0:
-        logging.error("No instances in cluster! Aborting")
+        logging.error("%s: No instances in cluster! Aborting" % cluster_name)
         return False
 
     # Query an instance in the cluster for the Autoscaling Group Name
@@ -281,26 +281,26 @@ def scale_down_ecs_cluster(decrease_count, cluster_name=None, ignore_list=[], dr
     asg_name = _get_autoscaling_group_name(instance_to_query)
     if asg_name:
         min_cluster_size = int(_get_autoscaling_group_min_size(asg_name))
-        logging.info("Determined minimum cluster size to be %s" % str(min_cluster_size))
+        logging.info("%s: Determined minimum cluster size to be %s" % (cluster_name, str(min_cluster_size)))
     else:
-        logging.warning("Unable to determine minimum cluster size, defaulting to 1")
+        logging.warning("%s: Unable to determine minimum cluster size, defaulting to 1" % cluster_name)
         min_cluster_size = 1
 
     if instance_count <= min_cluster_size:
-        logging.error("Cluster is already at or below minimum size - unable to scale down further - aborting")
+        logging.error("%s: Cluster is already at or below minimum size - unable to scale down further - aborting" % cluster_name)
         return False
 
     if instance_count - decrease_count < min_cluster_size:
         # need to recalculate decrease_count
-        logging.warn("Decreasing cluster by the given count, %s, would result in cluster dropping below minimum size" % str(decrease_count))
+        logging.warn("%s: Decreasing cluster by the given count, %s, would result in cluster dropping below minimum size" % (cluster_name, str(decrease_count)))
         decrease_count = instance_count - min_cluster_size
-        logging.warn("Cluster min size is %s, current size is %s, can decrease by a maximum of %s" % (min_cluster_size, instance_count, decrease_count))
+        logging.warn("%s: Cluster min size is %s, current size is %s, can decrease by a maximum of %s" % (cluster_name, min_cluster_size, instance_count, decrease_count))
 
     if decrease_count <= 0:
-        logging.error("Not enough instances in cluster to reduce size")
+        logging.error("%s: Not enough instances in cluster to reduce size" % cluster_name)
         return False
 
-    logging.info("Current cluster size: %s" % str(instance_count))
+    logging.info("%s: Current cluster size: %s" % (cluster_name, str(instance_count)))
 
     # Determine number of instances in each az
     azs = {}
@@ -319,7 +319,7 @@ def scale_down_ecs_cluster(decrease_count, cluster_name=None, ignore_list=[], dr
     # Only handle 2 AZs for now
     if len(azs) == 1:
         # only one availability zone in use - just remove the top entry
-        logging.debug('Only one availabiliy zone in play - select the least loaded instance')
+        logging.debug('%s: Only one availability zone in play - select the least loaded instance' % cluster_name)
         terminate_list = container_instance_list[:decrease_count]
     elif len(azs) == 2:
         az_names = []
@@ -330,18 +330,18 @@ def scale_down_ecs_cluster(decrease_count, cluster_name=None, ignore_list=[], dr
             if len(azs[az_names[0]]) > len(azs[az_names[1]]) or len(azs[az_names[0]]) == len(azs[az_names[1]]):
                 # first group is greater than or equal to the second group - first take from group 1
                 instance_to_terminate = azs[az_names[0]].pop(0)
-                logging.debug('Selecting instance from AZ: %s' % az_names[0])
+                logging.debug('%s: Selecting instance from AZ: %s' % (cluster_name, az_names[0]))
                 terminate_list.append(instance_to_terminate)
             else:
                 # first group is smaller than the second group - first take from group 2
                 instance_to_terminate = azs[az_names[1]].pop(0)
-                logging.debug('Selecting instance from AZ: %s' % az_names[1])
+                logging.debug('%s: Selecting instance from AZ: %s' % (cluster_name, az_names[1]))
                 terminate_list.append(instance_to_terminate)
     else:
-        logging.error("Can't handle more than 2 availability zones currently")
+        logging.error("%s: Can't handle more than 2 availability zones currently" % cluster_name)
         sys.exit(1)
 
-    logging.debug("Terminate instance list: %s" % str(terminate_list))
+    logging.debug("%s: Terminate instance list: %s" % (cluster_name, str(terminate_list)))
     # Drain the least loaded instances
     _start_draining_instances(cluster_name, terminate_list, dryrun)
 
