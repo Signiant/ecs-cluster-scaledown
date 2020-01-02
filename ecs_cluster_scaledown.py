@@ -195,7 +195,7 @@ def _can_be_terminated(cluster_name, container_instance_id, ignore_list=[]):
                 return True
     else:
         # too many tasks
-        logging.warn("%s: Too many tasks on this instance - can NOT be terminated" % cluster_name)
+        logging.warning("%s: Too many tasks on this instance - can NOT be terminated" % cluster_name)
         return False
 
 
@@ -292,9 +292,9 @@ def scale_down_ecs_cluster(decrease_count, cluster_name=None, ignore_list=[], dr
 
     if instance_count - decrease_count < min_cluster_size:
         # need to recalculate decrease_count
-        logging.warn("%s: Decreasing cluster by the given count, %s, would result in cluster dropping below minimum size" % (cluster_name, str(decrease_count)))
+        logging.warning("%s: Decreasing cluster by the given count, %s, would result in cluster dropping below minimum size" % (cluster_name, str(decrease_count)))
         decrease_count = instance_count - min_cluster_size
-        logging.warn("%s: Cluster min size is %s, current size is %s, can decrease by a maximum of %s" % (cluster_name, min_cluster_size, instance_count, decrease_count))
+        logging.warning("%s: Cluster min size is %s, current size is %s, can decrease by a maximum of %s" % (cluster_name, min_cluster_size, instance_count, decrease_count))
 
     if decrease_count <= 0:
         logging.error("%s: Not enough instances in cluster to reduce size" % cluster_name)
