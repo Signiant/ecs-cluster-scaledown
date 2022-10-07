@@ -10,7 +10,7 @@ logging.getLogger('botocore').setLevel(logging.CRITICAL)
 
 
 def _get_instances_in_cluster(cluster_name, next_token=None, status=None):
-    '''Get instances in the given cluster'''
+    """Get instances in the given cluster"""
     result = []
     if next_token:
         if status:
@@ -109,7 +109,7 @@ def _get_sorted_instance_list_with_info(cluster_name):
 
 
 def _start_draining_instances(cluster_name, container_instance_id_list, dryrun=False):
-    ''' Put the given instance in a draining state '''
+    """ Put the given instance in a draining state """
     logging.debug("Attempting to put the following container instances in a DRAINING state: %s" % str(container_instance_id_list))
     if not dryrun:
         try:
@@ -142,7 +142,7 @@ def _start_draining_instances(cluster_name, container_instance_id_list, dryrun=F
 
 
 def _get_instance_tasks(cluster_name, container_instance_id, next_token=None):
-    ''' Get a list of tasks running for the given instance '''
+    """ Get a list of tasks running for the given instance """
     result = []
     if next_token:
         query_result = ECS.list_tasks(cluster=cluster_name, containerInstance=container_instance_id, nextToken=next_token)
@@ -162,11 +162,11 @@ def _get_instance_tasks(cluster_name, container_instance_id, next_token=None):
 
 
 def _can_be_terminated(cluster_name, container_instance_id, ignore_list=[]):
-    '''
+    """
     Determine if the given instance can be terminated
     An instance is deemed ready for termination if no tasks are running on it, or
     only tasks matching the ignore_list are left running on it
-    '''
+    """
     task_count = _get_instance_task_count(cluster_name, container_instance_id)
     if task_count == 0:
         logging.debug("No tasks running on this instance - can be terminated")
@@ -200,7 +200,7 @@ def _can_be_terminated(cluster_name, container_instance_id, ignore_list=[]):
 
 
 def _terminate_and_remove_from_autoscaling_group(cluster_name, container_instance_id, dryrun=False):
-    ''' Terminate the given instance and remove it from the autoscaling group while decrementing the desired count '''
+    """ Terminate the given instance and remove it from the autoscaling group while decrementing the desired count """
     result = None
     try:
         query_result = ECS.describe_container_instances(cluster=cluster_name, containerInstances=[container_instance_id])
@@ -255,13 +255,14 @@ def remove_instance_from_ecs_cluster_by_instance_id(cluster_name, instance_id, i
 
 
 def scale_down_ecs_cluster(decrease_count, cluster_name=None, ignore_list=[], dryrun=False):
-    '''
+    """
     Scale down the given ECS cluster by the count given
     :param decrease_count: number of instances to remove from cluster
     :param cluster_name: name of the cluster to scale down
+    :param ignore_list: list of tasks to ignore
     :param dryrun: dryrun only - no changes
     :return: Boolean Success
-    '''
+    """
     if not cluster_name:
         logging.critical("Must provide cluster name")
     logging.info("%s: Asked to scale down cluster by a count of %s" % (cluster_name, str(decrease_count)))
@@ -384,7 +385,7 @@ if __name__ == "__main__":
     fh = logging.handlers.RotatingFileHandler(LOG_FILENAME, maxBytes=5242880, backupCount=5)
     fh.setLevel(logging.DEBUG)
     # create console handler using level set in log_level
-    ch = logging.StreamHandler()
+    ch = logging.StreamHandler(stream=sys.stdout)
     ch.setLevel(log_level)
     console_formatter = logging.Formatter('%(levelname)8s: %(message)s')
     ch.setFormatter(console_formatter)
