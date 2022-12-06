@@ -1,0 +1,66 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Scale down given ECS cluster(s) based on given criteria
+
+Parameters:
+  appName:
+    Type: String
+    Default: 'ECS-Cluster-Scaledown'
+  schedule:
+    Type: String
+    Default: 'rate(1 hour)' # Hourly
+
+Resources:
+  LambdaFunction:
+    Type: 'AWS::Serverless::Function'
+    Properties:
+      FunctionName: !Ref appName
+      Runtime: python3.9
+      CodeUri: src/
+      Handler: ecs_cluster_scaledown.lambda_handler
+      Description: Scale down a given ECS cluster based on given criteria
+      MemorySize: 128
+      Timeout: 900
+      Events:
+        ScheduleUsEast1:
+          Type: Schedule
+          Properties:
+            Schedule: !Ref schedule
+            Input: '{"cluster_name":"cluster_x","region":"us-east-1","alarm_name":"cluster_x scale down","ignore_list":["task1","task2"]}'
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: "Allow"
+              Action:
+                - "lambda:InvokeFunction"
+              Resource:
+                - !Sub 'arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:${appName}'
+            # ECS Permissions
+            - Effect: "Allow"
+              Action:
+                - "ecs:ListContainerInstances"
+                - "ecs:DescribeContainerInstances"
+                - "ecs:ListTasks"
+                - "ecs:DescribeTasks"
+                - "ecs:UpdateContainerInstancesState"
+              Resource:
+                - '*'
+            # EC2 Permissions
+            - Effect: "Allow"
+              Action:
+                - "ec2:DescribeInstances"
+              Resource:
+                - '*'
+            # ASG Permissions
+            - Effect: "Allow"
+              Action:
+                - "asg:DescribeAutoScalingGroups"
+                - "asg:TerminateInstanceInAutoScalingGroup"
+              Resource:
+                - '*'
+            # CloudWatch Permissions
+            -   Effect: "Allow"
+                Action:
+                  - 'cloudwatch:DescribeAlarms'
+                Resource:
+                  - '*'
