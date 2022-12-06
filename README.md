@@ -25,11 +25,35 @@ If the above conditions are met, then the following happens:
 Alternatively, an instance ID can be specified to be selectively removed from the cluster. Note that this
 instance MUST be in a DRAINING state already.
 
-# Prerequisites
+# Solutions
+Two separate solutions are provided here. You can run this in a docker container (and hence schedule it as an ECS
+task) or you can run it as a lambda (and schedule the lambda run)
+
+## Lambda based
+
+### Usage
+This tool was developed with the idea of it being run periodically. This can be accomplished using a lambda that
+is scheduled to be invoked on a periodic basis - that way if an instance wasn't able to be immediately removed from
+the cluster (due to running tasks on that instance), the instance would get removed in a subsequent run of the tool.
+
+Included here is a sample samconfig.toml file that can be filled in with appropriate values. If you would like to 
+operate on more than one cluster (eg. multiple regions) then you can modify the template.yaml and add more events
+similar to the exiting `ScheduleUsEast1` event
+
+Once all values have been filled in, you can build and deploy the lambda as follows:
+
+```bash
+cd lambda
+sam build && sam deploy --config-env prod --profile <aws_cli_profile_name>
+```
+
+
+## Docker based
+### Prerequisites
 * Docker must be installed
 * Either an AWS role (if running on EC2) or an access key/secret key
 
-# Usage
+### Usage
 
 This tool was developed with the idea of it being run periodically (as an ECS scheduled task, although 
 generally speaking, a simple cron job would also work) - that way if an instance wasn't able to be
@@ -71,7 +95,7 @@ optional arguments:
   --dryrun              Do a dryrun - no changes will be performed
 ```
 
-# Examples
+### Examples
 
 ```bash
 docker pull signiant/ecs-cluster-scaledown
