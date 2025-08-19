@@ -15,7 +15,7 @@ Resources:
     Type: 'AWS::Serverless::Function'
     Properties:
       FunctionName: !Ref appName
-      Runtime: python3.9
+      Runtime: python3.13
       CodeUri: src/
       Handler: ecs_cluster_scaledown.lambda_handler
       Description: Scale down a given ECS cluster based on given criteria

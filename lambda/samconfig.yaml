@@ -1,0 +1,11 @@
+version: 0.1
+prod:
+  deploy:
+    parameters:
+      stack_name: ECS-Cluster-Scaledown
+      resolve_s3: true
+      region: <region>
+      confirm_changeset: false
+      capabilities: CAPABILITY_NAMED_IAM
+      parameter_overrides:
+        - appName=ECS-Cluster-Scaledown
