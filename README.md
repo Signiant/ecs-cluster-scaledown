@@ -36,7 +36,7 @@ This tool was developed with the idea of it being run periodically. This can be 
 is scheduled to be invoked on a periodic basis - that way if an instance wasn't able to be immediately removed from
 the cluster (due to running tasks on that instance), the instance would get removed in a subsequent run of the tool.
 
-Included here is a sample samconfig.toml file that can be filled in with appropriate values. If you would like to 
+Included here is a sample samconfig.yaml file that can be filled in with appropriate values. If you would like to
 operate on more than one cluster (eg. multiple regions) then you can modify the template.yaml and add more events
 similar to the exiting `ScheduleUsEast1` event
 
